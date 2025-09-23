@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE_NAME: sit722-app
+  IMAGE_NAME: sit722-frontend
   ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
 
 jobs:
@@ -20,8 +20,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Example: Node.js setup (safe even if not needed)
-      - name: Setup Node
+      - name: Setup Node (optional, safe to leave)
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -55,7 +54,7 @@ jobs:
       - name: Build & tag image
         run: |
           GIT_SHA=${{ github.sha }}
-          docker build -t $ACR_LOGIN_SERVER/${{ env.IMAGE_NAME }}:${GIT_SHA} .
+          docker build -f frontend/Dockerfile -t $ACR_LOGIN_SERVER/${{ env.IMAGE_NAME }}:${GIT_SHA} ./frontend
           echo "IMAGE_TAG=$GIT_SHA" >> $GITHUB_ENV
 
       - name: Push image to ACR
