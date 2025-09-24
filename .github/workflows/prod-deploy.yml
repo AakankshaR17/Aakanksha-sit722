@@ -1,22 +1,24 @@
-name: CD Production
+name: deploy
 
 on:
   push:
     branches:
       - main
 
-env:
-  REGISTRY: aakankshaacr722.azurecr.io
-  IMAGE_NAME: sit722-app
+permissions:
+  id-token: write    # ✅ required for OIDC authentication
+  contents: read     # ✅ required to checkout the repository
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # Azure login with OIDC
       - name: Azure login (OIDC)
         uses: azure/login@v1
         with:
@@ -24,29 +26,27 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # Log in to ACR
       - name: ACR docker login
-        uses: azure/docker-login@v1
-        with:
-          login-server: ${{ env.REGISTRY }}
-          username: ${{ secrets.AZURE_CLIENT_ID }}
-          password: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          az acr login --name ${{ secrets.AZURE_ACR_NAME }}
 
+      # Build & tag Docker image
       - name: Build and tag image
         run: |
-          GIT_SHA=$(git rev-parse --short HEAD)
-          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${GIT_SHA} .
-          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${GIT_SHA} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:prod-latest
+          IMAGE=${{ secrets.AZURE_ACR_NAME }}.azurecr.io/prod-frontend:${{ github.sha }}
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          docker build -t $IMAGE ./frontend
 
+      # Push image to ACR
       - name: Push image to ACR
         run: |
-          GIT_SHA=$(git rev-parse --short HEAD)
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${GIT_SHA}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:prod-latest
+          docker push $IMAGE
 
+      # Deploy to Azure Container Apps (Production)
       - name: Deploy to Azure Container Apps (Production)
         run: |
-          GIT_SHA=$(git rev-parse --short HEAD)
           az containerapp update \
-            -n sit722-prod \
-            -g RG_SIT722_PROD \
-            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${GIT_SHA}
+            --name aca-frontend-prod \
+            --resource-group RG_SIT722_PROD \
+            --image $IMAGE
