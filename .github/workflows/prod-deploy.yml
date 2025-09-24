@@ -1,24 +1,30 @@
-name: deploy
+name: Deploy to Azure Container Apps (Production)
 
 on:
   push:
     branches:
-      - main
+      - main   # only trigger on main branch pushes
 
-permissions:
-  id-token: write    # ✅ required for OIDC authentication
-  contents: read     # ✅ required to checkout the repository
+env:
+  RESOURCE_GROUP: RG_SIT722_PROD
+  ACA_ENV: aca-env-prod
+  APP_NAME: aca-frontend-prod
+  ACR_NAME: aakankshaacr722
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required for OIDC login
+      contents: read
 
     steps:
-      # Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Azure login with OIDC
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
       - name: Azure login (OIDC)
         uses: azure/login@v1
         with:
@@ -26,27 +32,21 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Log in to ACR
       - name: ACR docker login
-        run: |
-          az acr login --name ${{ secrets.AZURE_ACR_NAME }}
+        run: az acr login --name $ACR_NAME
 
-      # Build & tag Docker image
-      - name: Build and tag image
+      - name: Build & Push Docker Image
         run: |
-          IMAGE=${{ secrets.AZURE_ACR_NAME }}.azurecr.io/prod-frontend:${{ github.sha }}
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
-          docker build -t $IMAGE ./frontend
+          docker buildx build \
+            --platform linux/amd64 \
+            -t $ACR_NAME.azurecr.io/frontend:latest \
+            -t $ACR_NAME.azurecr.io/frontend:${{ github.sha }} \
+            ./frontend \
+            --push
 
-      # Push image to ACR
-      - name: Push image to ACR
-        run: |
-          docker push $IMAGE
-
-      # Deploy to Azure Container Apps (Production)
       - name: Deploy to Azure Container Apps (Production)
         run: |
           az containerapp update \
-            --name aca-frontend-prod \
-            --resource-group RG_SIT722_PROD \
-            --image $IMAGE
+            -g $RESOURCE_GROUP \
+            -n $APP_NAME \
+            --image $ACR_NAME.azurecr.io/frontend:${{ github.sha }}
