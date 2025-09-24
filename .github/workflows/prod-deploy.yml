@@ -1,8 +1,10 @@
-name: Production Deploy
+name: Stage Deploy
 
 on:
-  push:
-    branches: [ "main" ]
+  workflow_run:
+    workflows: [ "CI (testing)" ]
+    types:
+      - completed
 
 permissions:
   id-token: write
@@ -11,26 +13,17 @@ permissions:
 env:
   IMAGE_NAME: sit722-frontend
   ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
-  PROD_RG: ${{ vars.PROD_RG }}
-  PROD_ENV_NAME: ${{ vars.PROD_ENV_NAME }}
-  PROD_APP_NAME: ${{ vars.PROD_APP_NAME }}
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  STAGE_ENV_NAME: ${{ vars.STAGE_ENV_NAME }}
+  STAGE_APP_NAME: ${{ vars.STAGE_APP_NAME }}
   AZURE_REGION: ${{ vars.AZURE_REGION }}
 
 jobs:
-  deploy-production:
+  deploy-staging:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
       - name: Download image reference artifact
         uses: actions/download-artifact@v4
         with:
@@ -41,26 +34,41 @@ jobs:
         id: image
         run: echo "IMAGE=$(cat image.txt)" >> $GITHUB_ENV
 
-      - name: Create production environment (if not exists)
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create staging environment (if not exists)
         run: |
           az containerapp env create \
-            -g $PROD_RG \
-            -n $PROD_ENV_NAME \
+            -g $AZURE_RESOURCE_GROUP \
+            -n $STAGE_ENV_NAME \
             -l $AZURE_REGION \
             --logs-workspace-id ${{ secrets.LOG_ANALYTICS_WORKSPACE_ID }} \
             --logs-workspace-key ${{ secrets.LOG_ANALYTICS_WORKSPACE_KEY }} || true
 
-      - name: Deploy production app
+      - name: Deploy app to staging
         run: |
           az containerapp create \
-            -g $PROD_RG \
-            -n $PROD_APP_NAME \
-            --environment $PROD_ENV_NAME \
+            -g $AZURE_RESOURCE_GROUP \
+            -n $STAGE_APP_NAME \
+            --environment $STAGE_ENV_NAME \
             --image $IMAGE \
             --target-port 80 \
             --ingress external \
             --registry-server $ACR_LOGIN_SERVER \
             --query properties.configuration.ingress.fqdn -o tsv > fqdn.txt
 
-      - name: Show production URL
-        run: echo "Production app available at: $(cat fqdn.txt)"
+      - name: Show staging URL
+        run: echo "Staging app available at: $(cat fqdn.txt)"
+
+      - name: Smoke test
+        run: curl -I https://$(cat fqdn.txt)
+
+      - name: Cleanup staging
+        if: always()
+        run: |
+          az containerapp delete -g $AZURE_RESOURCE_GROUP -n $STAGE_APP_NAME -y
